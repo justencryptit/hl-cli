@@ -1,4 +1,4 @@
-# hl — Hyperliquid CLI for AI Agents
+# hl — Hyperliquid CLI
 
 A Rust CLI tool for interacting with the [Hyperliquid](https://hyperliquid.xyz) decentralized exchange, built on [hl-rs](https://github.com/kinetiq-research/hl-rs). Designed as a tool for AI agents (e.g., [Claude Code](https://claude.com/claude-code), OpenClaw) to read market data, manage positions, and place orders on Hyperliquid.
 
@@ -48,6 +48,8 @@ HL_NETWORK=mainnet
 | `--network mainnet\|testnet` | Target network (env: `HL_NETWORK`, default: mainnet) |
 | `--json` | Machine-readable JSON output |
 | `--dex <name>` | HIP-3 builder-deployed perp dex (env: `HL_DEX`, e.g. `xyz`, `km`, `flx`) |
+| `-y, --yes` | Skip confirmation prompts for write operations |
+| `-w, --watch <N>` | Watch mode: re-run every N seconds (read commands only) |
 
 ### Read Commands
 
@@ -65,19 +67,35 @@ hl historical-orders              # Past orders
 hl meta                           # Perp asset list (name → index mapping)
 hl spot-meta                      # Spot token/pair metadata
 hl mids                           # All mid prices (spot names resolved)
-hl book ETH                       # L2 order book
+hl book ETH                       # L2 order book with depth bars
+hl book ETH --levels 20           # More levels
 hl trades ETH                     # Recent trades
+hl spread ETH                     # Bid/ask spread, midpoint, spread in bps
+hl oi                             # Open interest for all coins
+hl oi ETH                         # Open interest for a specific coin
+hl search SOL                     # Search/filter assets by name
+hl status                         # API health check with latency
 
 # Funding & candles
 hl funding ETH --start 1700000000000
 hl user-funding --start 1700000000000
 hl candles ETH --interval 1h --start 1700000000000 --end 1700100000000
+
+# PnL
+hl pnl                            # PnL summary across all positions
+
+# Watch mode (live updates)
+hl -w 5 positions                 # Refresh positions every 5s
+hl -w 2 book ETH                  # Live order book
+hl -w 10 pnl                      # Live PnL
 ```
 
 ### Write Commands
 
+All write commands require confirmation unless `-y` is passed.
+
 ```bash
-# Orders
+# Limit orders
 hl order place ETH buy --size 0.1 --price 3000                        # Limit GTC
 hl order place ETH buy --size 0.1 --price 3000 --tif ioc              # IOC
 hl order place ETH sell --size 0.1 --price 4000 --reduce-only         # Reduce-only
@@ -86,9 +104,23 @@ hl order place ETH sell --size 0.1 --price 2800 \
 hl order place ETH sell --size 0.1 --price 3500 \
   --trigger-price 3400 --trigger-type tp                               # Take-profit
 
+# Market orders (IOC at slippage-adjusted price)
+hl order market ETH buy --size 0.1                                     # By size
+hl order market ETH buy --amount 500                                   # By USD notional
+hl order market ETH buy --size 0.1 --slippage 0.5                     # Custom slippage (0.5%)
+
+# Batch orders (from JSON string or file)
+hl order batch '[{"coin":"ETH","side":"buy","size":"0.1","price":"3000"}]'
+hl order batch @orders.json
+
+# Cancel
 hl order cancel ETH --oid 123456                                       # Cancel by ID
 hl order cancel-by-cloid ETH --cloid my-order-1                       # Cancel by client ID
-hl order modify --oid 123456 ETH buy --size 0.2 --price 3100          # Modify
+hl order cancel-all                                                    # Cancel ALL open orders
+hl order cancel-all ETH                                                # Cancel all ETH orders
+
+# Modify
+hl order modify --oid 123456 ETH buy --size 0.2 --price 3100
 
 # Leverage
 hl leverage set ETH 10 --mode cross
@@ -97,6 +129,9 @@ hl leverage set BTC 5 --mode isolated
 # Transfers
 hl transfer --to 0x1234...abcd --amount 100       # USDC transfer
 hl withdraw --to 0x1234...abcd --amount 100        # Withdraw to L1
+
+# Skip confirmation
+hl -y order place ETH buy --size 0.1 --price 3000
 ```
 
 ### HIP-3 Builder-Deployed Perps
@@ -128,31 +163,78 @@ hl --dex xyz order cancel TSLA --oid 123456
 hl --dex xyz leverage set TSLA 5 --mode cross
 ```
 
+### Utility Commands
+
+```bash
+hl shell                          # Interactive REPL (type commands without 'hl' prefix)
+hl upgrade                        # Self-upgrade from source
+hl install-skill                  # Install Claude Code skill
+hl install-skill --project        # Also install to current project
+```
+
 ## Output
 
-Default output is human-readable tables. Use `--json` for machine-readable JSON.
+Default output is human-readable tables with depth visualization. Use `--json` for machine-readable JSON.
 
 ```
 $ hl book ETH
 
 === ETH Order Book ===
 
-┌───────────┬──────────┐
-│ Ask Price ┆ Ask Size │
-╞═══════════╪══════════╡
-│ 2135.5    ┆ 130.1075 │
-│ 2135.4    ┆ 114.5266 │
-│ 2135.3    ┆ 150.2073 │
-└───────────┴──────────┘
-  ---
-┌───────────┬──────────┐
-│ Bid Price ┆ Bid Size │
-╞═══════════╪══════════╡
-│ 2134.5    ┆ 82.3901  │
-│ 2134.4    ┆ 0.0333   │
-│ 2134.3    ┆ 8.5141   │
-└───────────┴──────────┘
+┌───────────┬──────────┬──────────────────────┐
+│ Ask Price ┆ Ask Size ┆ Depth                │
+╞═══════════╪══════════╪══════════════════════╡
+│ 2043.1    ┆ 0.2449   ┆ ██                   │
+│ 2043.0    ┆ 0.2309   ┆ █                    │
+│ 2041.8    ┆ 3.0358   ┆ ████████████████████ │
+│ 2041.2    ┆ 0.2451   ┆ ██                   │
+│ 2040.0    ┆ 0.0101   ┆                      │
+│ 2039.1    ┆ 3.0735   ┆ ████████████████████ │
+│ 2036.8    ┆ 2.9944   ┆ ███████████████████  │
+│ 2036.0    ┆ 3.0954   ┆ ████████████████████ │
+│ 2035.1    ┆ 1.5285   ┆ ██████████           │
+│ 2034.7    ┆ 0.1357   ┆ █                    │
+└───────────┴──────────┴──────────────────────┘
+  --- spread: 0.6 ---
+┌───────────┬──────────┬──────────────────────┐
+│ Bid Price ┆ Bid Size ┆ Depth                │
+╞═══════════╪══════════╪══════════════════════╡
+│ 2034.1    ┆ 0.7595   ┆ ██████████████████   │
+│ 2033.2    ┆ 0.025    ┆ █                    │
+│ 2033.1    ┆ 0.8017   ┆ ███████████████████  │
+│ 2033.0    ┆ 0.8402   ┆ ████████████████████ │
+│ 2032.5    ┆ 0.0109   ┆                      │
+│ 2032.2    ┆ 0.0396   ┆ █                    │
+│ 2031.9    ┆ 0.8179   ┆ ███████████████████  │
+│ 2031.8    ┆ 0.771    ┆ ██████████████████   │
+│ 2030.1    ┆ 0.0368   ┆ █                    │
+│ 2029.9    ┆ 0.8199   ┆ ████████████████████ │
+└───────────┴──────────┴──────────────────────┘
 ```
+
+```
+$ hl status
+
+┌─────────┬─────────┐
+│ Check   ┆ Result  │
+╞═════════╪═════════╡
+│ Status  ┆ OK      │
+│ Network ┆ testnet │
+│ Latency ┆ 444ms   │
+│ Assets  ┆ 207     │
+└─────────┴─────────┘
+```
+
+## Safety
+
+All write operations (orders, cancels, leverage changes, transfers) require interactive confirmation before execution:
+
+```
+⚠ Place order: BUY 0.1 ETH @ 3000
+  Proceed? [y/N]
+```
+
+Pass `-y` or `--yes` to skip confirmation (useful for scripts/agents that handle their own safety checks).
 
 ## AI Agent Integration
 
@@ -183,7 +265,7 @@ hl book ETH --json      # Order book
 hl positions --json     # Current positions
 
 # Place orders (agent should confirm with user first)
-hl order place ETH buy --size 0.1 --price 3000 --json
+hl -y order place ETH buy --size 0.1 --price 3000 --json
 ```
 
 ## Built With
@@ -192,4 +274,4 @@ hl order place ETH buy --size 0.1 --price 3000 --json
 - [clap](https://crates.io/crates/clap) — CLI argument parsing
 - [comfy-table](https://crates.io/crates/comfy-table) — Table formatting
 - [alloy](https://crates.io/crates/alloy) — Ethereum signing
-# hl-cli
+- [rustyline](https://crates.io/crates/rustyline) — Interactive REPL
